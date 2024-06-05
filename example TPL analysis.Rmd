@@ -211,7 +211,7 @@ get_main_tables <- function(model, round = 2) {
 
 ## Burning ratings
 ```{r Main effect of TGI vs cold and warm on burning ratings}
-df_burn = read.csv(here::here("df_burn.csv")) %>% mutate(id = as.factor(id), stim = as.factor(stim))
+df_burn = read.csv(here::here("data","df_burn.csv")) %>% mutate(id = as.factor(id), stim = as.factor(stim))
 
 #ZOIB Model
 model_BURN_stim <- gamlss(burnbeta ~ stim + trial + re(random = ~ stim  | id),
