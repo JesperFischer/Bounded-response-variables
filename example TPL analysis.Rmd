@@ -1,0 +1,264 @@
+---
+title: "Example"
+output: html_document
+date: "2024-06-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load("rmarkdown","tidyverse","lmerTest","brms","ggeffects", "gamlss", "DHARMa", "glmmTMB", "cowplot", "scales", "matlabr","osfr","parameters")
+
+```
+
+# functions
+```{r}
+
+residual_check <- function(model) {
+  model_sim <- DHARMa::simulateResiduals(model)
+  return(plot(model_sim))
+}
+
+#function take takes the models used in the study and makes a table of all regression coefficients.
+get_main_tables <- function(model, round = 2) {
+  
+  #retrieve the fixed effects of the model
+  
+  if("Component" %in% names(data.frame(parameters::model_parameters(model)))){
+  
+    fixedeffecs <- parameters::model_parameters(model) %>%
+      mutate(CI = NULL, CI_low = NULL, CI_high = NULL, df_error = NULL) %>%
+      dplyr::rename(parameter = Component) %>%
+      dplyr::select(parameter, everything()) %>% 
+      mutate(parameter = ifelse(str_detect(parameter, "conditional"), "μ", ifelse(str_detect(parameter, "sigma"), "σ", ifelse(str_detect(parameter, "tau"), "τ", "ν"))))
+    #renaming
+    names(fixedeffecs) <- c("parameter","contrast", "\u03B2", "SE", "t", "p")
+    #formular for the model (i.e. the math)
+    formular <- as.character(formula(model))
+    }else{
+    
+      fixedeffecs <- parameters::model_parameters(model) %>%
+        mutate(CI = NULL, CI_low = NULL, CI_high = NULL, df_error = NULL, Component = "conditional") %>%
+        dplyr::rename(parameter = Component) %>%
+        dplyr::select(parameter, everything()) %>% 
+        mutate(parameter = ifelse(str_detect(parameter, "conditional"), "μ", ifelse(str_detect(parameter, "sigma"), "σ", ifelse(str_detect(parameter, "tau"), "τ", "ν"))))
+      #renaming
+      names(fixedeffecs) <- c("parameter","contrast", "\u03B2", "SE", "t", "p")
+      #formular for the model (i.e. the math)
+      formular <- as.character(formula(model))
+      
+    
+  }
+  #get family
+  family = family(model)[2]
+  link = model$mu.link
+  
+  if(family == "Beta Inflated"){
+    family = "ZOIB"
+  }
+  
+  if(family != "ZOIB"){
+    coefnames <- fixedeffecs$contrast
+    
+    
+    name_mapping <- c(
+      "expectedN" = "Expectation(Neutral)",
+      "expectedUE" = "Expectation(Unpredicted)",
+      "expectedTGI" = "Expectation(TGI)",
+      "coolness" = "Perceived Coldness",
+      "contingencyPredicts warm" = "Contingency predicts(Warm)",
+      "trial" = "Trialnumber",
+      "coolness:contingencyPredicts warm" = "Perceived Coldness:\nContingency_predicts(Warm)",
+      "sa1hat" = "prediction uncertainty"
+    )
+    
+    # Create a new vector of row names by applying the name mapping to the current row names
+    new_coefnames <- sapply(coefnames, function(x) {
+      if (x %in% names(name_mapping)) {
+        return(name_mapping[[x]])
+      } else {
+        return(x)
+      }
+    })
+    
+    #add the new names
+    fixedeffecs$contrast <- new_coefnames
+    
+  }
+  
+  
+  #big renaming of columns: for all cases of reference for stimulus
+  # reference of TGI
+  if (sum(grepl("TGI", fixedeffecs$contrast)) == 0) {
+    fixedeffecs <- fixedeffecs %>% mutate(contrast = case_when(
+      contrast == "stimwarm" ~ "Stimulus(Warm)",
+      contrast == "stimcold" ~ "Stimulus(Cold)",
+      contrast == "trial" ~ "Trialnumber",
+      contrast == "sa2" ~ "Estimation uncertainty",
+      contrast == "sa2:stimcold" ~ "Estimation uncertainty:\nStimulus(Warm)",
+      contrast == "sa2:stimwarm" ~ "Estimation uncertainty:\nStimulus(Cold)",
+      contrast == "Ratingscaleburnbeta" ~ "Ratingscale(Burning)",
+      contrast == "Ratingscalewarmbeta" ~ "Ratingscale(Warm)",
+      contrast == "belief_to_cold:Ratingscaleburnbeta" ~ "belief to cold:\nRatingscale(Burning)",
+      contrast == "belief_to_cold:Ratingscalewarmbeta" ~ "belief to cold:\nRatingscale(Warm)",
+      contrast == "(Intercept)" ~ "Intercept",
+      contrast == "RateConCon" ~ "RatingScale(Factual)",
+      contrast == "predRespcold" ~ "Prediction(Cold)",
+      contrast == "belief_to_cold:stimwarm" ~ "belief to cold:\nStimulus(Warm)",
+      contrast == "RateConCon:stimcold" ~ "RatingScale (Factual):\nStimulus(Cold)",
+      contrast == "RateConCon:predRespcold" ~ "RatingScale (Factual):\nPrediction(Cold)",
+      contrast == "stimcold:predRespcold" ~ "Stimulus (Cold):\nPrediction(Cold)",
+      contrast == "RateConCon:stimcold:predRespcold" ~ "RatingScale(Factual):\n Stimulus (Cold):\n Prediction(Cold)",
+      TRUE ~ contrast
+    ))
+    references <- c(
+      "stimulus" = "TGI",
+      "RatingScale" = "Counterfactual",
+      "Prediction" = "Warm"
+    )
+  }
+  # reference of cold
+  if (sum(grepl("cold", fixedeffecs$contrast)) == 0) {
+    fixedeffecs <- fixedeffecs %>% mutate(contrast = case_when(
+      contrast == "stimwarm" ~ "stimulus(Warm)",
+      contrast == "stimTGI" ~ "stimulus(TGI)",
+      contrast == "trial" ~ "trialnumber",
+      contrast == "Ratingscaleburnbeta" ~ "Ratingscale(Burning)",
+      contrast == "Ratingscalewarmbeta" ~ "Ratingscale(Warm)",
+      contrast == "belief_to_cold:Ratingscaleburnbeta" ~ "belief to cold:\nRatingscale(Burning)",
+      contrast == "belief_to_cold:Ratingscalewarmbeta" ~ "belief to cold:\nRatingscale(Warm)",
+      contrast == "(Intercept)" ~ "Intercept",
+      contrast == "RateConCon" ~ "Rating Scale(Factual)",
+      contrast == "predRespcold" ~ "Prediction(Cold)",
+      contrast == "belief_to_cold:stimwarm" ~ "belief to cold:\nStimulus(Warm)",
+      contrast == "RateConCon:stimcold" ~ "RatingScale (Factual):\nStimulus (Cold)",
+      contrast == "RateConCon:predRespcold" ~ "RatingScale (Factual):\nPrediction(Cold)",
+      contrast == "stimcold:predRespcold" ~ "Stimulus(Cold):\nPrediction(Cold)",
+      contrast == "RateConCon:stimcold:predRespcold" ~ "RatingScale(Factual):\nStimulus(Cold):\nPrediction(Cold)",
+      TRUE ~ contrast
+    ))
+    references <- c(
+      "stimulus" = "cold",
+      "RatingScale" = "Counterfactual",
+      "Prediction" = "Warm"
+    )
+  }
+  # reference of warm
+  if (sum(grepl("warm", fixedeffecs$contrast)) == 0) {
+    fixedeffecs <- fixedeffecs %>% mutate(contrast = case_when(
+      contrast == "stimcold" ~ "stimulus(Cold)",
+      contrast == "stimTGI" ~ "stimulus (TGI)",
+      contrast == "trial" ~ "trialnumber",
+      contrast == "Ratingscaleburnbeta" ~ "Ratingscale(Burning)",
+      contrast == "Ratingscalewarmbeta" ~ "Ratingscale(Warm)",
+      contrast == "belief_to_cold:Ratingscaleburnbeta" ~ "belief to cold:\nRatingscale(Burning)",
+      contrast == "belief_to_cold:Ratingscalewarmbeta" ~ "belief to cold:\nRatingscale(Warm)",
+      contrast == "(Intercept)" ~ "Intercept",
+      contrast == "RateConCon" ~ "Rating Scale(Factual)",
+      contrast == "predRespcold" ~ "Prediction(Cold)",
+      contrast == "RateConCon:stimcold" ~ "RatingScale(Factual):\nStimulus(Cold)",
+      contrast == "RateConCon:predRespcold" ~ "RatingScale(Factual):\nPrediction (Cold)",
+      contrast == "stimcold:predRespcold" ~ "Stimulus(Cold):\nPrediction(Cold)",
+      contrast == "RateConCon:stimcold:predRespcold" ~ "RatingScale(Factual):\nStimulus(Cold):\nPrediction(Cold)",
+      TRUE ~ contrast
+    ))
+    references <- c(
+      "stimulus" = "warm",
+      "RatingScale" = "Counterfactual",
+      "Prediction" = "Warm"
+    )
+  }
+  
+  
+  if(formular[2] == "value" & grepl("stim",formular[3]) & !grepl("sa2",formular[3])& !grepl("RateCon",formular[3])){
+    formular[2] = "Rating(Coldbeta | Warmbeta | Burningbeta)"
+  }
+  
+  if(formular[2] == "value" & grepl("stim",formular[3]) & grepl("sa2",formular[3])){
+    formular[2] = "Burningbeta"
+  }
+  
+  if(grepl("sa2", formular[3])){
+    formular[3] = str_replace(formular[3],"sa2","Est. uncertainty")
+  }
+  
+  if(grepl("sa1hat", formular[3])){
+    formular[3] = str_replace(formular[3],"sa1hat","Pred. uncertainty")
+  }
+  
+  #formating and rounding the numeric values:
+  fixedeffecs[, 3:6] <- apply(fixedeffecs[, 3:6], 2, function(x) formatC(x, format = "g", digits = round))
+  #the table
+  ft <- flextable(fixedeffecs) %>%
+    add_header_row(values = paste0(formular[2], formular[1], formular[3], ", ", family, "(link = ",link,")"), colwidths = c(ncol(fixedeffecs))) %>%
+    #add_header_lines(values = title) %>%
+    width(j = c(1, 3:ncol(fixedeffecs)), width = 1) %>%
+    width(j = 2, width = 1.8) %>%
+    fontsize(size = 10, part = "all") %>%
+    theme_vanilla() %>%
+    align(i = 1:2, j = NULL, align = "center", part = "header")
+  
+  
+  return(ft)
+}
+
+
+```
+
+
+
+# Example models tested 
+
+## Burning ratings
+```{r Main effect of TGI vs cold and warm on burning ratings}
+df_burn = read.csv(here::here("df_burn.csv")) %>% mutate(id = as.factor(id), stim = as.factor(stim))
+
+#ZOIB Model
+model_BURN_stim <- gamlss(burnbeta ~ stim + trial + re(random = ~ stim  | id),
+  nu.formula = ~ stim + trial + re(random = ~ 1 | id),
+  tau.formula = ~ stim + trial + re(random = ~ 1 | id),
+  sigma.formula = ~ stim + trial + re(random = ~ 1  | id),
+  data = df_burn,
+  family = BEINF(mu.link = "logit", sigma.link = "logit", nu.link = "logit", tau.link = "logit"),
+  control = gamlss.control(n.cyc = 100, trace = T)
+)
+
+
+#Beta distribution with zero and ones removed      
+model_beta <- glmmTMB::glmmTMB(burnbeta ~ stim + trial + (stim|id),
+           family = glmmTMB::beta_family(link = "logit"),
+           data = df_burn %>% filter(burnbeta != 0 & burnbeta != 1))
+
+#normal distribution without zero and one with response variable being transformed
+model_normal <- lmer(brms::logit_scaled(burnbeta) ~ stim + trial + (stim|id),
+  data = df_burn %>% filter(burnbeta != 0 & burnbeta != 1))
+
+
+# simulated residuals:
+plot(model_BURN_stim)
+
+residual_check(model_normal)
+
+residual_check(model_beta)
+
+wp(model_BURN_stim, xvar =~ stim*trial)
+
+
+plot(ggeffects::ggpredict(model_BURN_stim,terms = c("trial[all]", "stim"),type = "random"))
+
+#
+
+model_BURN_stim1 <- gamlss(burnbeta ~ stim + trial + random(id),
+  nu.formula = ~ stim + trial + random(id),
+  tau.formula = ~ stim + trial + random(id),
+  sigma.formula = ~ stim + trial + random(id),
+  data = df_burn,
+  family = BEINF(mu.link = "logit", sigma.link = "logit", nu.link = "logit", tau.link = "logit"),
+  control = gamlss.control(n.cyc = 100, trace = T)
+)
+
+
+plot(ggeffects::ggpredict(model_BURN_stim1,terms = c("trial[all]", "stim"),type = "random"))
+
+```
+
